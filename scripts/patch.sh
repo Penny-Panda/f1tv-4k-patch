@@ -108,178 +108,71 @@ ok "Decompiled successfully"
 
 # ─── Diagnostic: locate F1 Multiview gates ───────────────────────────────────
 
-info "Tracing F1 Multiview channel list..."
+info "Dumping four Multiview control methods..."
 
 python3 - "${DECOMPILED}" << 'PYEOF'
 import os
-import re
 import sys
 
 root = sys.argv[1]
 
-print("===== MULTIVIEW CHANNEL TRACE =====")
-
-targets = []
+target = None
 
 for dirpath, _, filenames in os.walk(root):
-    norm = dirpath.replace("\\", "/")
+    if "TiledPlayerViewModel.smali" in filenames:
+        p = os.path.join(dirpath, "TiledPlayerViewModel.smali")
 
-    if "/com/avs/f1/ui/tiledmediaplayer/" not in norm:
-        continue
+        if "/com/avs/f1/ui/tiledmediaplayer/viewmodel/" in p.replace("\\", "/"):
+            target = p
+            break
 
-    for filename in filenames:
-        if filename.endswith(".smali"):
-            targets.append(os.path.join(dirpath, filename))
+if not target:
+    print("ERROR: TiledPlayerViewModel.smali not found")
+    sys.exit(1)
 
+lines = open(target, "r", errors="ignore").readlines()
 
-# -------------------------------------------------------------------
-# 1. Find EVERY caller of List<ChannelInfo>.isMultiview()
-# -------------------------------------------------------------------
+wanted = [
+    "onAddChannelClick(I)V",
+    "onRemoveChannelClick(I)V",
+    "onEnableSelectionModeClick(I)V",
+    "onDisableSelectionModeClick()V",
+]
 
-needle = (
-    "Lcom/avs/f1/ui/tiledmediaplayer/viewmodel/"
-    "TiledPlayerViewModelKt;->isMultiview(Ljava/util/List;)Z"
-)
+print("===== MULTIVIEW CONTROL METHODS =====")
 
-print("\n===== CALLERS OF isMultiview() =====")
+for wanted_name in wanted:
 
-for path in targets:
-
-    try:
-        lines = open(path, "r", errors="ignore").readlines()
-    except Exception:
-        continue
-
-    for hit, line in enumerate(lines):
-
-        if needle not in line:
-            continue
-
-        start = hit
-        while start >= 0 and not lines[start].lstrip().startswith(".method"):
-            start -= 1
-
-        end = hit
-        while end < len(lines) and not lines[end].lstrip().startswith(".end method"):
-            end += 1
-
-        print(f"\nFILE: {path}")
-        print(f"METHOD: {lines[start].strip()}")
-
-        for n in range(start, min(end + 1, len(lines))):
-            print(f"{n+1}: {lines[n].rstrip()}")
-
-
-# -------------------------------------------------------------------
-# 2. Print interesting method NAMES from TiledPlayerViewModel
-#    Don't dump their bodies yet.
-# -------------------------------------------------------------------
-
-print("\n===== TILED PLAYER VIEWMODEL METHOD INDEX =====")
-
-vm = None
-
-for path in targets:
-    if path.endswith("/TiledPlayerViewModel.smali"):
-        vm = path
-        break
-
-if vm:
-
-    lines = open(vm, "r", errors="ignore").readlines()
-
-    keywords = re.compile(
-        r"channel|tile|grid|select|switch|add|remove|replace|"
-        r"playback|content",
-        re.I
-    )
+    found = False
 
     for i, line in enumerate(lines):
 
-        if line.lstrip().startswith(".method") and keywords.search(line):
-            print(f"{i+1}: {line.strip()}")
-
-else:
-    print("TiledPlayerViewModel.smali NOT FOUND")
-
-
-# -------------------------------------------------------------------
-# 3. Find methods touching ChannelInfo in TiledPlayerViewModel
-# -------------------------------------------------------------------
-
-print("\n===== METHODS TOUCHING ChannelInfo =====")
-
-if vm:
-
-    lines = open(vm, "r", errors="ignore").readlines()
-
-    i = 0
-
-    while i < len(lines):
-
-        if not lines[i].lstrip().startswith(".method"):
-            i += 1
+        if not line.lstrip().startswith(".method"):
             continue
 
-        start = i
-        i += 1
-
-        while i < len(lines) and not lines[i].lstrip().startswith(".end method"):
-            i += 1
-
-        end = min(i + 1, len(lines))
-        block = "".join(lines[start:end])
-
-        if "Lcom/avs/f1/interactors/playback/ChannelInfo;" in block:
-
-            print(f"\nMETHOD LINE {start+1}: {lines[start].strip()}")
-
-            for n in range(start, end):
-                print(f"{n+1}: {lines[n].rstrip()}")
-
-        i = end
-
-
-# -------------------------------------------------------------------
-# 4. Find channel-transition handlers in the TV UI
-# -------------------------------------------------------------------
-
-print("\n===== CHANNEL TRANSITION HANDLERS =====")
-
-for path in targets:
-
-    if "ExternalSyntheticLambda" in path:
-        continue
-
-    try:
-        lines = open(path, "r", errors="ignore").readlines()
-    except Exception:
-        continue
-
-    for hit, line in enumerate(lines):
-
-        if "ChannelTransition;" not in line:
+        if wanted_name not in line:
             continue
 
-        start = hit
-        while start >= 0 and not lines[start].lstrip().startswith(".method"):
-            start -= 1
+        found = True
 
-        if start < 0:
-            continue
+        end = i
 
-        end = hit
-        while end < len(lines) and not lines[end].lstrip().startswith(".end method"):
+        while end < len(lines):
+            if lines[end].lstrip().startswith(".end method"):
+                break
             end += 1
 
-        print(f"\nFILE: {path}")
-        print(f"METHOD: {lines[start].strip()}")
+        print(f"\n===== {line.strip()} =====")
 
-        for n in range(start, min(end + 1, len(lines))):
-            print(f"{n+1}: {lines[n].rstrip()}")
+        for n in range(i, min(end + 1, len(lines))):
+            print(f"{n + 1}: {lines[n].rstrip()}")
 
+        break
 
-print("\n===== END MULTIVIEW CHANNEL TRACE =====")
+    if not found:
+        print(f"\nNOT FOUND: {wanted_name}")
+
+print("\n===== END MULTIVIEW CONTROL METHODS =====")
 PYEOF
 
 # ─── Patch smali ──────────────────────────────────────────────────────────────
