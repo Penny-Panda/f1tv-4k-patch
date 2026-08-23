@@ -108,85 +108,88 @@ ok "Decompiled successfully"
 
 # ─── Diagnostic: locate F1 Multiview gates ───────────────────────────────────
 
-info "Locating exact Multiview gate..."
+info "Locating Multiview preference and TV gate..."
 
 python3 - "${DECOMPILED}" << 'PYEOF'
 import os
+import re
 import sys
 
 root = sys.argv[1]
 
-target = None
+print("===== MULTIVIEW PREF TRACE =====")
 
-for dirpath, _, filenames in os.walk(root):
-    if "DeviceSupportImpl.smali" in filenames:
-        p = os.path.join(dirpath, "DeviceSupportImpl.smali")
-        if "/com/avs/f1/ui/tiledmediaplayer/" in p.replace("\\", "/"):
-            target = p
-            break
+rx = re.compile(
+    r"multiview|multi.?view|isMultiView|isMultiview",
+    re.I
+)
 
-if not target:
-    print("ERROR: DeviceSupportImpl.smali not found")
-    sys.exit(1)
-
-with open(target, "r", errors="ignore") as f:
-    lines = f.readlines()
-
-needles = [
-    "Device multiview capabilities is not supported because of:",
-    "multiview support is set to",
-]
-
-print("===== EXACT MULTIVIEW GATE =====")
-print(f"FILE: {target}")
-
-def containing_method(index):
-    start = index
-    while start >= 0 and not lines[start].lstrip().startswith(".method"):
-        start -= 1
-
-    end = index
-    while end < len(lines) and not lines[end].lstrip().startswith(".end method"):
-        end += 1
-
-    return start, min(end + 1, len(lines))
+allowed = (
+    "/com/avs/f1/repository/",
+    "/com/avs/f1/ui/tiledmediaplayer/",
+    "/com/avs/f1/ui/settings/",
+    "/com/avs/f1/settings/",
+)
 
 seen = set()
 
-for needle in needles:
-    for i, line in enumerate(lines):
-        if needle.lower() not in line.lower():
+for dirpath, _, filenames in os.walk(root):
+
+    norm = dirpath.replace("\\", "/")
+
+    if not any(x in norm for x in allowed):
+        continue
+
+    for filename in filenames:
+
+        if not filename.endswith(".smali"):
             continue
 
-        start, end = containing_method(i)
-
-        if start < 0 or start in seen:
+        if "ExternalSyntheticLambda" in filename:
             continue
 
-        seen.add(start)
+        path = os.path.join(dirpath, filename)
 
-        print("\n")
-        print(f"MATCH: {needle}")
-        print(f"METHOD LINE {start + 1}: {lines[start].strip()}")
+        try:
+            lines = open(path, "r", errors="ignore").readlines()
+        except Exception:
+            continue
 
-        for n in range(start, end):
-            print(f"{n + 1}: {lines[n].rstrip()}")
+        for hit, line in enumerate(lines):
 
-print("\n===== ALL DEVICE SUPPORT METHOD NAMES =====")
+            if not rx.search(line):
+                continue
 
-for i, line in enumerate(lines):
-    if line.lstrip().startswith(".method"):
-        lowered = line.lower()
+            start = hit
+            while start >= 0 and not lines[start].lstrip().startswith(".method"):
+                start -= 1
 
-        if any(x in lowered for x in [
-            "multi",
-            "support",
-            "capab",
-            "validate"
-        ]):
-            print(f"{i + 1}: {line.strip()}")
+            if start < 0:
+                key = (path, hit)
+                if key not in seen:
+                    seen.add(key)
+                    print(f"\nFILE: {path}")
+                    print(f"{hit+1}: {line.rstrip()}")
+                continue
 
-print("===== END EXACT MULTIVIEW GATE =====")
+            end = hit
+            while end < len(lines) and not lines[end].lstrip().startswith(".end method"):
+                end += 1
+
+            key = (path, start)
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+
+            print(f"\n===== FILE: {path} =====")
+            print(f"===== {lines[start].strip()} =====")
+
+            for n in range(start, min(end + 1, len(lines))):
+                print(f"{n+1}: {lines[n].rstrip()}")
+
+print("\n===== END MULTIVIEW PREF TRACE =====")
 PYEOF
 
 # ─── Patch smali ──────────────────────────────────────────────────────────────
