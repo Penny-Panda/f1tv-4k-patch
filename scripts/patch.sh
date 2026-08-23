@@ -106,6 +106,76 @@ info "Decompiling base.apk with apktool..."
 apktool d -f -o "${DECOMPILED}" "${BASE_APK}" >/dev/null 2>&1 || die "apktool decompile failed"
 ok "Decompiled successfully"
 
+# ─── Diagnostic: scan for Multiview implementation ───────────────────────────
+
+info "Scanning F1 TV APK for Multiview implementation..."
+
+python3 - "${DECOMPILED}" << 'PYEOF'
+import os
+import re
+import sys
+
+root = sys.argv[1]
+
+patterns = [
+    r"multiview",
+    r"multi.?view",
+    r"multi.?feed",
+    r"multi.?screen",
+    r"split.?screen",
+    r"mosaic",
+    r"secondary.?player",
+    r"player.?grid",
+    r"grid.?player",
+    r"feed.?slot",
+    r"view.?slot",
+    r"custom.?grid",
+]
+
+rx = re.compile("|".join(patterns), re.IGNORECASE)
+
+print("===== F1 APP MULTIVIEW SCAN =====")
+
+hits = 0
+
+for dirpath, _, filenames in os.walk(root):
+    for filename in filenames:
+        if not filename.endswith((".smali", ".xml", ".json", ".txt")):
+            continue
+
+        path = os.path.join(dirpath, filename)
+
+        try:
+            with open(path, "r", errors="ignore") as f:
+                lines = f.readlines()
+        except Exception:
+            continue
+
+        matches = []
+
+        for i, line in enumerate(lines, 1):
+            if rx.search(line):
+                matches.append((i, line.rstrip()))
+
+        if matches:
+            print(f"\nFILE: {path}")
+
+            for i, line in matches[:20]:
+                print(f"{i}: {line}")
+
+            hits += len(matches)
+
+            if hits >= 300:
+                print("\n[scan truncated at 300 hits]")
+                break
+
+    if hits >= 300:
+        break
+
+print(f"\nTOTAL MATCHES: {hits}")
+print("=================================")
+PYEOF
+
 # ─── Patch smali ──────────────────────────────────────────────────────────────
 
 info "Searching for DeviceSupportImpl.smali..."
