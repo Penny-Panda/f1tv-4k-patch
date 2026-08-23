@@ -108,89 +108,85 @@ ok "Decompiled successfully"
 
 # ─── Diagnostic: locate F1 Multiview gates ───────────────────────────────────
 
-info "Scanning F1 TV Multiview implementation and gates..."
+info "Locating exact Multiview gate..."
 
 python3 - "${DECOMPILED}" << 'PYEOF'
 import os
-import re
 import sys
 
 root = sys.argv[1]
 
-interesting = re.compile(
-    r"multiview|multi.?view|"
-    r"gridlayoutmode|gridselector|playergrid|"
-    r"ismultiview|isMultiView|"
-    r"device.*support|support.*device|"
-    r"tiled.*player",
-    re.IGNORECASE
-)
-
-print("===== F1 MULTIVIEW TARGETED SCAN =====")
+target = None
 
 for dirpath, _, filenames in os.walk(root):
+    if "DeviceSupportImpl.smali" in filenames:
+        p = os.path.join(dirpath, "DeviceSupportImpl.smali")
+        if "/com/avs/f1/ui/tiledmediaplayer/" in p.replace("\\", "/"):
+            target = p
+            break
 
-    norm = dirpath.replace("\\", "/")
+if not target:
+    print("ERROR: DeviceSupportImpl.smali not found")
+    sys.exit(1)
 
-    # F1's own application code only
-    if "/com/avs/f1/" not in norm:
-        continue
+with open(target, "r", errors="ignore") as f:
+    lines = f.readlines()
 
-    for filename in filenames:
+needles = [
+    "Device multiview capabilities is not supported because of:",
+    "multiview support is set to",
+]
 
-        if not filename.endswith(".smali"):
+print("===== EXACT MULTIVIEW GATE =====")
+print(f"FILE: {target}")
+
+def containing_method(index):
+    start = index
+    while start >= 0 and not lines[start].lstrip().startswith(".method"):
+        start -= 1
+
+    end = index
+    while end < len(lines) and not lines[end].lstrip().startswith(".end method"):
+        end += 1
+
+    return start, min(end + 1, len(lines))
+
+seen = set()
+
+for needle in needles:
+    for i, line in enumerate(lines):
+        if needle.lower() not in line.lower():
             continue
 
-        path = os.path.join(dirpath, filename)
+        start, end = containing_method(i)
 
-        try:
-            with open(path, "r", errors="ignore") as f:
-                lines = f.readlines()
-        except Exception:
+        if start < 0 or start in seen:
             continue
 
-        hits = [
-            i for i, line in enumerate(lines)
-            if interesting.search(line)
-        ]
+        seen.add(start)
 
-        if not hits:
-            continue
+        print("\n")
+        print(f"MATCH: {needle}")
+        print(f"METHOD LINE {start + 1}: {lines[start].strip()}")
 
-        print(f"\n\n===== FILE: {path} =====")
+        for n in range(start, end):
+            print(f"{n + 1}: {lines[n].rstrip()}")
 
-        shown = set()
+print("\n===== ALL DEVICE SUPPORT METHOD NAMES =====")
 
-        for hit in hits:
+for i, line in enumerate(lines):
+    if line.lstrip().startswith(".method"):
+        lowered = line.lower()
 
-            # Find containing method
-            method_start = hit
-            while method_start >= 0:
-                if lines[method_start].lstrip().startswith(".method"):
-                    break
-                method_start -= 1
+        if any(x in lowered for x in [
+            "multi",
+            "support",
+            "capab",
+            "validate"
+        ]):
+            print(f"{i + 1}: {line.strip()}")
 
-            method_end = hit
-            while method_end < len(lines):
-                if lines[method_end].lstrip().startswith(".end method"):
-                    break
-                method_end += 1
-
-            if method_start >= 0 and method_start not in shown:
-                shown.add(method_start)
-
-                print(f"\n--- METHOD starting line {method_start + 1} ---")
-
-                # Cap enormous methods
-                end = min(method_end + 1, method_start + 180)
-
-                for i in range(method_start, end):
-                    print(f"{i + 1}: {lines[i].rstrip()}")
-
-                if method_end + 1 > end:
-                    print("... [method truncated] ...")
-
-print("\n===== END F1 MULTIVIEW TARGETED SCAN =====")
+print("===== END EXACT MULTIVIEW GATE =====")
 PYEOF
 
 # ─── Patch smali ──────────────────────────────────────────────────────────────
