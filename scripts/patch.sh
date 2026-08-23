@@ -108,97 +108,37 @@ ok "Decompiled successfully"
 
 # ─── Diagnostic: locate F1 Multiview gates ───────────────────────────────────
 
-info "Finding exact Multiview UI call sites..."
+info "Dumping TV click listener only..."
 
 python3 - "${DECOMPILED}" << 'PYEOF'
 import os
 import sys
 
 root = sys.argv[1]
+target_name = 'ExtensionsKt$viewHolderClickListener$1.smali'
 
-needles = [
-    "Lcom/avs/f1/ui/tiledmediaplayer/viewmodel/TiledPlayerViewModel;->onEnableSelectionModeClick(I)V",
-    "Lcom/avs/f1/ui/tiledmediaplayer/viewmodel/TiledPlayerViewModel;->onAddChannelClick(I)V",
-    "Lcom/avs/f1/ui/tiledmediaplayer/viewmodel/TiledPlayerViewModel;->onRemoveChannelClick(I)V",
-    "Lcom/avs/f1/ui/tiledmediaplayer/viewmodel/TiledPlayerViewModel;->onDisableSelectionModeClick()V",
-    "Lcom/avs/f1/ui/tiledmediaplayer/viewmodel/TiledPlayerViewModel;->loadSingleViewModeChannel-iwyg8zc(I)V",
-]
-
-print("===== EXACT MULTIVIEW CALL SITES =====")
-
-seen = set()
+print("===== TV CLICK LISTENER =====")
 
 for dirpath, _, filenames in os.walk(root):
-
-    norm = dirpath.replace("\\", "/")
-
-    if "/com/avs/f1/" not in norm:
+    if target_name not in filenames:
         continue
 
-    for filename in filenames:
+    path = os.path.join(dirpath, target_name)
 
-        if not filename.endswith(".smali"):
-            continue
+    if "/com/avs/f1/ui/tiledmediaplayer/" not in path.replace("\\", "/"):
+        continue
 
-        path = os.path.join(dirpath, filename)
+    print(f"FILE: {path}\n")
 
-        try:
-            lines = open(path, "r", errors="ignore").readlines()
-        except Exception:
-            continue
+    with open(path, "r", errors="ignore") as f:
+        for n, line in enumerate(f, 1):
+            print(f"{n}: {line.rstrip()}")
 
-        for hit, line in enumerate(lines):
+    break
+else:
+    print("NOT FOUND")
 
-            matched = None
-
-            for needle in needles:
-                if needle in line:
-                    matched = needle
-                    break
-
-            if not matched:
-                continue
-
-            # Ignore definitions/accessors inside the ViewModel itself.
-            if path.endswith("/viewmodel/TiledPlayerViewModel.smali"):
-                continue
-
-            # Find containing method.
-            start = hit
-            while start >= 0 and not lines[start].lstrip().startswith(".method"):
-                start -= 1
-
-            end = hit
-            while end < len(lines) and not lines[end].lstrip().startswith(".end method"):
-                end += 1
-
-            key = (path, start, matched)
-
-            if key in seen:
-                continue
-
-            seen.add(key)
-
-            print("\n")
-            print(f"CALL: {matched}")
-            print(f"FILE: {path}")
-
-            if start >= 0:
-                print(f"METHOD: {lines[start].strip()}")
-
-                # We don't need the whole method.
-                lo = max(start, hit - 20)
-                hi = min(end + 1, hit + 25)
-
-                print(f"CALL AT SOURCE LINE {hit + 1}")
-
-                for n in range(lo, hi):
-                    marker = ">>>" if n == hit else "   "
-                    print(f"{marker} {n + 1}: {lines[n].rstrip()}")
-            else:
-                print(f"LINE {hit + 1}: {line.rstrip()}")
-
-print("\n===== END EXACT MULTIVIEW CALL SITES =====")
+print("===== END TV CLICK LISTENER =====")
 PYEOF
 
 # ─── Patch smali ──────────────────────────────────────────────────────────────
