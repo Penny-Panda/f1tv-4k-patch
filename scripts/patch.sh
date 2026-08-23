@@ -106,9 +106,9 @@ info "Decompiling base.apk with apktool..."
 apktool d -f -o "${DECOMPILED}" "${BASE_APK}" >/dev/null 2>&1 || die "apktool decompile failed"
 ok "Decompiled successfully"
 
-# ─── Diagnostic: scan for Multiview implementation ───────────────────────────
+# ─── Diagnostic: locate F1 Multiview gates ───────────────────────────────────
 
-info "Scanning F1 TV APK for Multiview implementation..."
+info "Scanning F1 TV Multiview implementation and gates..."
 
 python3 - "${DECOMPILED}" << 'PYEOF'
 import os
@@ -117,30 +117,28 @@ import sys
 
 root = sys.argv[1]
 
-patterns = [
-    r"multiview",
-    r"multi.?view",
-    r"multi.?feed",
-    r"multi.?screen",
-    r"split.?screen",
-    r"mosaic",
-    r"secondary.?player",
-    r"player.?grid",
-    r"grid.?player",
-    r"feed.?slot",
-    r"view.?slot",
-    r"custom.?grid",
-]
+interesting = re.compile(
+    r"multiview|multi.?view|"
+    r"gridlayoutmode|gridselector|playergrid|"
+    r"ismultiview|isMultiView|"
+    r"device.*support|support.*device|"
+    r"tiled.*player",
+    re.IGNORECASE
+)
 
-rx = re.compile("|".join(patterns), re.IGNORECASE)
-
-print("===== F1 APP MULTIVIEW SCAN =====")
-
-hits = 0
+print("===== F1 MULTIVIEW TARGETED SCAN =====")
 
 for dirpath, _, filenames in os.walk(root):
+
+    norm = dirpath.replace("\\", "/")
+
+    # F1's own application code only
+    if "/com/avs/f1/" not in norm:
+        continue
+
     for filename in filenames:
-        if not filename.endswith((".smali", ".xml", ".json", ".txt")):
+
+        if not filename.endswith(".smali"):
             continue
 
         path = os.path.join(dirpath, filename)
@@ -151,29 +149,48 @@ for dirpath, _, filenames in os.walk(root):
         except Exception:
             continue
 
-        matches = []
+        hits = [
+            i for i, line in enumerate(lines)
+            if interesting.search(line)
+        ]
 
-        for i, line in enumerate(lines, 1):
-            if rx.search(line):
-                matches.append((i, line.rstrip()))
+        if not hits:
+            continue
 
-        if matches:
-            print(f"\nFILE: {path}")
+        print(f"\n\n===== FILE: {path} =====")
 
-            for i, line in matches[:20]:
-                print(f"{i}: {line}")
+        shown = set()
 
-            hits += len(matches)
+        for hit in hits:
 
-            if hits >= 300:
-                print("\n[scan truncated at 300 hits]")
-                break
+            # Find containing method
+            method_start = hit
+            while method_start >= 0:
+                if lines[method_start].lstrip().startswith(".method"):
+                    break
+                method_start -= 1
 
-    if hits >= 300:
-        break
+            method_end = hit
+            while method_end < len(lines):
+                if lines[method_end].lstrip().startswith(".end method"):
+                    break
+                method_end += 1
 
-print(f"\nTOTAL MATCHES: {hits}")
-print("=================================")
+            if method_start >= 0 and method_start not in shown:
+                shown.add(method_start)
+
+                print(f"\n--- METHOD starting line {method_start + 1} ---")
+
+                # Cap enormous methods
+                end = min(method_end + 1, method_start + 180)
+
+                for i in range(method_start, end):
+                    print(f"{i + 1}: {lines[i].rstrip()}")
+
+                if method_end + 1 > end:
+                    print("... [method truncated] ...")
+
+print("\n===== END F1 MULTIVIEW TARGETED SCAN =====")
 PYEOF
 
 # ─── Patch smali ──────────────────────────────────────────────────────────────
