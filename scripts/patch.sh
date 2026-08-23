@@ -108,7 +108,7 @@ ok "Decompiled successfully"
 
 # ─── Diagnostic: locate F1 Multiview gates ───────────────────────────────────
 
-info "Dumping four Multiview control methods..."
+info "Finding exact Multiview UI call sites..."
 
 python3 - "${DECOMPILED}" << 'PYEOF'
 import os
@@ -116,63 +116,89 @@ import sys
 
 root = sys.argv[1]
 
-target = None
-
-for dirpath, _, filenames in os.walk(root):
-    if "TiledPlayerViewModel.smali" in filenames:
-        p = os.path.join(dirpath, "TiledPlayerViewModel.smali")
-
-        if "/com/avs/f1/ui/tiledmediaplayer/viewmodel/" in p.replace("\\", "/"):
-            target = p
-            break
-
-if not target:
-    print("ERROR: TiledPlayerViewModel.smali not found")
-    sys.exit(1)
-
-lines = open(target, "r", errors="ignore").readlines()
-
-wanted = [
-    "onAddChannelClick(I)V",
-    "onRemoveChannelClick(I)V",
-    "onEnableSelectionModeClick(I)V",
-    "onDisableSelectionModeClick()V",
+needles = [
+    "Lcom/avs/f1/ui/tiledmediaplayer/viewmodel/TiledPlayerViewModel;->onEnableSelectionModeClick(I)V",
+    "Lcom/avs/f1/ui/tiledmediaplayer/viewmodel/TiledPlayerViewModel;->onAddChannelClick(I)V",
+    "Lcom/avs/f1/ui/tiledmediaplayer/viewmodel/TiledPlayerViewModel;->onRemoveChannelClick(I)V",
+    "Lcom/avs/f1/ui/tiledmediaplayer/viewmodel/TiledPlayerViewModel;->onDisableSelectionModeClick()V",
+    "Lcom/avs/f1/ui/tiledmediaplayer/viewmodel/TiledPlayerViewModel;->loadSingleViewModeChannel-iwyg8zc(I)V",
 ]
 
-print("===== MULTIVIEW CONTROL METHODS =====")
+print("===== EXACT MULTIVIEW CALL SITES =====")
 
-for wanted_name in wanted:
+seen = set()
 
-    found = False
+for dirpath, _, filenames in os.walk(root):
 
-    for i, line in enumerate(lines):
+    norm = dirpath.replace("\\", "/")
 
-        if not line.lstrip().startswith(".method"):
+    if "/com/avs/f1/" not in norm:
+        continue
+
+    for filename in filenames:
+
+        if not filename.endswith(".smali"):
             continue
 
-        if wanted_name not in line:
+        path = os.path.join(dirpath, filename)
+
+        try:
+            lines = open(path, "r", errors="ignore").readlines()
+        except Exception:
             continue
 
-        found = True
+        for hit, line in enumerate(lines):
 
-        end = i
+            matched = None
 
-        while end < len(lines):
-            if lines[end].lstrip().startswith(".end method"):
-                break
-            end += 1
+            for needle in needles:
+                if needle in line:
+                    matched = needle
+                    break
 
-        print(f"\n===== {line.strip()} =====")
+            if not matched:
+                continue
 
-        for n in range(i, min(end + 1, len(lines))):
-            print(f"{n + 1}: {lines[n].rstrip()}")
+            # Ignore definitions/accessors inside the ViewModel itself.
+            if path.endswith("/viewmodel/TiledPlayerViewModel.smali"):
+                continue
 
-        break
+            # Find containing method.
+            start = hit
+            while start >= 0 and not lines[start].lstrip().startswith(".method"):
+                start -= 1
 
-    if not found:
-        print(f"\nNOT FOUND: {wanted_name}")
+            end = hit
+            while end < len(lines) and not lines[end].lstrip().startswith(".end method"):
+                end += 1
 
-print("\n===== END MULTIVIEW CONTROL METHODS =====")
+            key = (path, start, matched)
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+
+            print("\n")
+            print(f"CALL: {matched}")
+            print(f"FILE: {path}")
+
+            if start >= 0:
+                print(f"METHOD: {lines[start].strip()}")
+
+                # We don't need the whole method.
+                lo = max(start, hit - 20)
+                hi = min(end + 1, hit + 25)
+
+                print(f"CALL AT SOURCE LINE {hit + 1}")
+
+                for n in range(lo, hi):
+                    marker = ">>>" if n == hit else "   "
+                    print(f"{marker} {n + 1}: {lines[n].rstrip()}")
+            else:
+                print(f"LINE {hit + 1}: {line.rstrip()}")
+
+print("\n===== END EXACT MULTIVIEW CALL SITES =====")
 PYEOF
 
 # ─── Patch smali ──────────────────────────────────────────────────────────────
