@@ -106,91 +106,6 @@ info "Decompiling base.apk with apktool..."
 apktool d -f -o "${DECOMPILED}" "${BASE_APK}" >/dev/null 2>&1 || die "apktool decompile failed"
 ok "Decompiled successfully"
 
-# ─── Diagnostic: locate F1 Multiview gates ───────────────────────────────────
-
-info "Auditing TV/mobile and Multiview feature gates..."
-
-python3 - "${DECOMPILED}" << 'PYEOF'
-import os
-import re
-import sys
-
-root = sys.argv[1]
-
-patterns = [
-    # Android runtime form-factor detection
-    r"UiModeManager",
-    r"getCurrentModeType",
-    r"UI_MODE_TYPE_TELEVISION",
-    r"uiMode",
-    r"FEATURE_LEANBACK",
-    r"FEATURE_TELEVISION",
-
-    # F1/build flavor/platform checks
-    r"f1-tv",
-    r"f1_mobile",
-    r"f1-mobile",
-    r"BuildConfig;->FLAVOR",
-    r"BuildConfig;->BUILD_TYPE",
-    r"platform",
-
-    # likely Multiview feature/config gates
-    r"multiview",
-    r"multi.?view",
-    r"tiledmedia",
-]
-
-rx = re.compile("|".join(patterns), re.I)
-
-print("===== TV / MOBILE / MULTIVIEW GATE AUDIT =====")
-
-count = 0
-
-for dirpath, _, filenames in os.walk(root):
-
-    norm = dirpath.replace("\\", "/")
-
-    # Only F1's own code — ignore AndroidX/ClearVR libraries.
-    if "/com/avs/f1/" not in norm:
-        continue
-
-    for filename in filenames:
-
-        if not filename.endswith(".smali"):
-            continue
-
-        # avoid synthetic garbage unless its filename itself is relevant
-        if "ExternalSyntheticLambda" in filename:
-            continue
-
-        path = os.path.join(dirpath, filename)
-
-        try:
-            lines = open(path, "r", errors="ignore").readlines()
-        except Exception:
-            continue
-
-        hits = []
-
-        for i, line in enumerate(lines):
-            if rx.search(line):
-                hits.append((i + 1, line.rstrip()))
-
-        if not hits:
-            continue
-
-        print(f"\nFILE: {path}")
-
-        # Line hits only. Do NOT dump methods.
-        for lineno, text in hits:
-            print(f"{lineno}: {text}")
-
-        count += len(hits)
-
-print(f"\nTOTAL MATCHING LINES: {count}")
-print("===== END TV / MOBILE / MULTIVIEW GATE AUDIT =====")
-PYEOF
-
 # ─── Patch smali ──────────────────────────────────────────────────────────────
 
 info "Searching for DeviceSupportImpl.smali..."
@@ -281,6 +196,175 @@ PYEOF
 
 [[ $? -eq 0 ]] || die "Smali patching failed"
 ok "DeviceSupportImpl validators patched"
+
+# ─── Force native F1 TV Multiview ─────────────────────────────────────────────
+
+info "Enabling native F1 TV Multiview..."
+
+COMPOSER="$(find "${DECOMPILED}" \
+    -name 'ComposerUseCaseImpl.smali' \
+    -path '*/com/avs/f1/interactors/composer/*' \
+    -print -quit 2>/dev/null || true)"
+
+MULTIVIEW_TOGGLE="$(find "${DECOMPILED}" \
+    -name 'MultiViewToggleUseCaseImpl.smali' \
+    -path '*/com/avs/f1/interactors/settings/*' \
+    -print -quit 2>/dev/null || true)"
+
+[[ -n "${COMPOSER}" && -f "${COMPOSER}" ]] \
+    || die "ComposerUseCaseImpl.smali not found"
+
+[[ -n "${MULTIVIEW_TOGGLE}" && -f "${MULTIVIEW_TOGGLE}" ]] \
+    || die "MultiViewToggleUseCaseImpl.smali not found"
+
+python3 - "${COMPOSER}" "${MULTIVIEW_TOGGLE}" << 'PYEOF'
+import re
+import sys
+
+composer_path = sys.argv[1]
+toggle_path = sys.argv[2]
+
+
+# ── 1. Force Composer's Multiview device flags to TRUE ───────────────────────
+
+with open(composer_path, "r", errors="ignore") as f:
+    content = f.read()
+
+for method in (
+    "isMultiviewSupported",
+    "isMultiviewToggleEnabled",
+):
+    pattern = re.compile(
+        r'invoke-interface \{[^}]+\}, '
+        r'Lcom/avs/f1/DeviceInfo;->'
+        + re.escape(method)
+        + r'\(\)Ljava/lang/Boolean;\s*\n'
+        r'(\s*)move-result-object ([vp]\d+)'
+    )
+
+    match = pattern.search(content)
+
+    if not match:
+        print(
+            f"ERROR: could not locate Composer gate {method}",
+            file=sys.stderr
+        )
+        sys.exit(1)
+
+    register = match.group(2)
+
+    replacement = (
+        f"sget-object {register}, "
+        "Ljava/lang/Boolean;->TRUE:Ljava/lang/Boolean;"
+    )
+
+    content, count = pattern.subn(
+        replacement,
+        content,
+        count=1
+    )
+
+    if count != 1:
+        print(
+            f"ERROR: expected to patch {method} once, patched {count}",
+            file=sys.stderr
+        )
+        sys.exit(1)
+
+    print(f"  Composer {method} -> TRUE")
+
+with open(composer_path, "w") as f:
+    f.write(content)
+
+
+# ── 2. Force F1's actual Multiview setting state to ON ───────────────────────
+
+with open(toggle_path, "r", errors="ignore") as f:
+    content = f.read()
+
+pattern = re.compile(
+    r'\.method public getToggleState\(\)'
+    r'Lcom/avs/f1/interactors/settings/'
+    r'MultiViewToggleUseCase\$ToggleState;'
+    r'.*?'
+    r'\.end method',
+    re.S
+)
+
+replacement = """.method public getToggleState()Lcom/avs/f1/interactors/settings/MultiViewToggleUseCase$ToggleState;
+    .locals 1
+
+    sget-object v0, Lcom/avs/f1/interactors/settings/MultiViewToggleUseCase$ToggleState;->ON:Lcom/avs/f1/interactors/settings/MultiViewToggleUseCase$ToggleState;
+
+    return-object v0
+.end method"""
+
+content, count = pattern.subn(
+    replacement,
+    content,
+    count=1
+)
+
+if count != 1:
+    print(
+        f"ERROR: expected one getToggleState patch, patched {count}",
+        file=sys.stderr
+    )
+    sys.exit(1)
+
+with open(toggle_path, "w") as f:
+    f.write(content)
+
+print("  MultiViewToggleUseCase.getToggleState -> ON")
+print("  Native F1 TV Multiview gates forced enabled")
+PYEOF
+
+[[ $? -eq 0 ]] \
+    && ok "Native F1 TV Multiview patch applied" \
+    || die "Native F1 TV Multiview patch failed"
+
+# ─── Verify Multiview patch ───────────────────────────────────────────────────
+
+info "Verifying native Multiview patch..."
+
+python3 - "${COMPOSER}" "${MULTIVIEW_TOGGLE}" << 'PYEOF'
+import sys
+
+composer = open(sys.argv[1], errors="ignore").read()
+toggle = open(sys.argv[2], errors="ignore").read()
+
+errors = []
+
+if "DeviceInfo;->isMultiviewSupported()Ljava/lang/Boolean;" in composer:
+    errors.append("isMultiviewSupported runtime call still exists")
+
+if "DeviceInfo;->isMultiviewToggleEnabled()Ljava/lang/Boolean;" in composer:
+    errors.append("isMultiviewToggleEnabled runtime call still exists")
+
+needle = (
+    "Lcom/avs/f1/interactors/settings/"
+    "MultiViewToggleUseCase$ToggleState;->ON:"
+    "Lcom/avs/f1/interactors/settings/"
+    "MultiViewToggleUseCase$ToggleState;"
+)
+
+if needle not in toggle:
+    errors.append("forced ON toggle state not present")
+
+if errors:
+    for error in errors:
+        print("VERIFY ERROR:", error)
+    sys.exit(1)
+
+print("  ✓ Composer multiviewSupported forced")
+print("  ✓ Composer multiviewToggleEnabled forced")
+print("  ✓ Multiview toggle state forced ON")
+print("  ✓ Static Multiview patch verification passed")
+PYEOF
+
+[[ $? -eq 0 ]] \
+    && ok "Multiview patch verified" \
+    || die "Multiview verification failed"
 
 # ─── Patch diagnostics preferences ──────────────────────────────────────────
 
