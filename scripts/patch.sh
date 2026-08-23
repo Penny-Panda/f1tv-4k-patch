@@ -108,7 +108,7 @@ ok "Decompiled successfully"
 
 # ─── Diagnostic: locate F1 Multiview gates ───────────────────────────────────
 
-info "Locating Multiview preference and TV gate..."
+info "Tracing F1 Multiview channel list..."
 
 python3 - "${DECOMPILED}" << 'PYEOF'
 import os
@@ -117,79 +117,169 @@ import sys
 
 root = sys.argv[1]
 
-print("===== MULTIVIEW PREF TRACE =====")
+print("===== MULTIVIEW CHANNEL TRACE =====")
 
-rx = re.compile(
-    r"multiview|multi.?view|isMultiView|isMultiview",
-    re.I
-)
-
-allowed = (
-    "/com/avs/f1/repository/",
-    "/com/avs/f1/ui/tiledmediaplayer/",
-    "/com/avs/f1/ui/settings/",
-    "/com/avs/f1/settings/",
-)
-
-seen = set()
+targets = []
 
 for dirpath, _, filenames in os.walk(root):
-
     norm = dirpath.replace("\\", "/")
 
-    if not any(x in norm for x in allowed):
+    if "/com/avs/f1/ui/tiledmediaplayer/" not in norm:
         continue
 
     for filename in filenames:
+        if filename.endswith(".smali"):
+            targets.append(os.path.join(dirpath, filename))
 
-        if not filename.endswith(".smali"):
+
+# -------------------------------------------------------------------
+# 1. Find EVERY caller of List<ChannelInfo>.isMultiview()
+# -------------------------------------------------------------------
+
+needle = (
+    "Lcom/avs/f1/ui/tiledmediaplayer/viewmodel/"
+    "TiledPlayerViewModelKt;->isMultiview(Ljava/util/List;)Z"
+)
+
+print("\n===== CALLERS OF isMultiview() =====")
+
+for path in targets:
+
+    try:
+        lines = open(path, "r", errors="ignore").readlines()
+    except Exception:
+        continue
+
+    for hit, line in enumerate(lines):
+
+        if needle not in line:
             continue
 
-        if "ExternalSyntheticLambda" in filename:
+        start = hit
+        while start >= 0 and not lines[start].lstrip().startswith(".method"):
+            start -= 1
+
+        end = hit
+        while end < len(lines) and not lines[end].lstrip().startswith(".end method"):
+            end += 1
+
+        print(f"\nFILE: {path}")
+        print(f"METHOD: {lines[start].strip()}")
+
+        for n in range(start, min(end + 1, len(lines))):
+            print(f"{n+1}: {lines[n].rstrip()}")
+
+
+# -------------------------------------------------------------------
+# 2. Print interesting method NAMES from TiledPlayerViewModel
+#    Don't dump their bodies yet.
+# -------------------------------------------------------------------
+
+print("\n===== TILED PLAYER VIEWMODEL METHOD INDEX =====")
+
+vm = None
+
+for path in targets:
+    if path.endswith("/TiledPlayerViewModel.smali"):
+        vm = path
+        break
+
+if vm:
+
+    lines = open(vm, "r", errors="ignore").readlines()
+
+    keywords = re.compile(
+        r"channel|tile|grid|select|switch|add|remove|replace|"
+        r"playback|content",
+        re.I
+    )
+
+    for i, line in enumerate(lines):
+
+        if line.lstrip().startswith(".method") and keywords.search(line):
+            print(f"{i+1}: {line.strip()}")
+
+else:
+    print("TiledPlayerViewModel.smali NOT FOUND")
+
+
+# -------------------------------------------------------------------
+# 3. Find methods touching ChannelInfo in TiledPlayerViewModel
+# -------------------------------------------------------------------
+
+print("\n===== METHODS TOUCHING ChannelInfo =====")
+
+if vm:
+
+    lines = open(vm, "r", errors="ignore").readlines()
+
+    i = 0
+
+    while i < len(lines):
+
+        if not lines[i].lstrip().startswith(".method"):
+            i += 1
             continue
 
-        path = os.path.join(dirpath, filename)
+        start = i
+        i += 1
 
-        try:
-            lines = open(path, "r", errors="ignore").readlines()
-        except Exception:
-            continue
+        while i < len(lines) and not lines[i].lstrip().startswith(".end method"):
+            i += 1
 
-        for hit, line in enumerate(lines):
+        end = min(i + 1, len(lines))
+        block = "".join(lines[start:end])
 
-            if not rx.search(line):
-                continue
+        if "Lcom/avs/f1/interactors/playback/ChannelInfo;" in block:
 
-            start = hit
-            while start >= 0 and not lines[start].lstrip().startswith(".method"):
-                start -= 1
+            print(f"\nMETHOD LINE {start+1}: {lines[start].strip()}")
 
-            if start < 0:
-                key = (path, hit)
-                if key not in seen:
-                    seen.add(key)
-                    print(f"\nFILE: {path}")
-                    print(f"{hit+1}: {line.rstrip()}")
-                continue
-
-            end = hit
-            while end < len(lines) and not lines[end].lstrip().startswith(".end method"):
-                end += 1
-
-            key = (path, start)
-
-            if key in seen:
-                continue
-
-            seen.add(key)
-
-            print(f"\n===== FILE: {path} =====")
-            print(f"===== {lines[start].strip()} =====")
-
-            for n in range(start, min(end + 1, len(lines))):
+            for n in range(start, end):
                 print(f"{n+1}: {lines[n].rstrip()}")
 
-print("\n===== END MULTIVIEW PREF TRACE =====")
+        i = end
+
+
+# -------------------------------------------------------------------
+# 4. Find channel-transition handlers in the TV UI
+# -------------------------------------------------------------------
+
+print("\n===== CHANNEL TRANSITION HANDLERS =====")
+
+for path in targets:
+
+    if "ExternalSyntheticLambda" in path:
+        continue
+
+    try:
+        lines = open(path, "r", errors="ignore").readlines()
+    except Exception:
+        continue
+
+    for hit, line in enumerate(lines):
+
+        if "ChannelTransition;" not in line:
+            continue
+
+        start = hit
+        while start >= 0 and not lines[start].lstrip().startswith(".method"):
+            start -= 1
+
+        if start < 0:
+            continue
+
+        end = hit
+        while end < len(lines) and not lines[end].lstrip().startswith(".end method"):
+            end += 1
+
+        print(f"\nFILE: {path}")
+        print(f"METHOD: {lines[start].strip()}")
+
+        for n in range(start, min(end + 1, len(lines))):
+            print(f"{n+1}: {lines[n].rstrip()}")
+
+
+print("\n===== END MULTIVIEW CHANNEL TRACE =====")
 PYEOF
 
 # ─── Patch smali ──────────────────────────────────────────────────────────────
