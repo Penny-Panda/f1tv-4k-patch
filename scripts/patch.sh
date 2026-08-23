@@ -520,6 +520,24 @@ replacement = """.method private static getDefaultDisplaySize(Landroid/content/C
 
 content, count = re.subn(pattern, replacement, content, flags=re.DOTALL)
 if count == 0:
+    print("===== TrueTVDisplaySizeHelper METHODS =====", file=sys.stderr)
+
+    lines = content.splitlines()
+
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        if (
+            stripped.startswith(".method")
+            or "Point;" in line
+            or "Display" in line
+            or "display" in line
+            or "Size" in line
+            or "size" in line
+        ):
+            print(f"{i}: {line}", file=sys.stderr)
+
+    print("===========================================", file=sys.stderr)
     print("ERROR: getDefaultDisplaySize not found", file=sys.stderr)
     sys.exit(1)
 
