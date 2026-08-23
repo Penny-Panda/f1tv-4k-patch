@@ -108,37 +108,87 @@ ok "Decompiled successfully"
 
 # ─── Diagnostic: locate F1 Multiview gates ───────────────────────────────────
 
-info "Dumping TV click listener only..."
+info "Auditing TV/mobile and Multiview feature gates..."
 
 python3 - "${DECOMPILED}" << 'PYEOF'
 import os
+import re
 import sys
 
 root = sys.argv[1]
-target_name = 'ExtensionsKt$viewHolderClickListener$1.smali'
 
-print("===== TV CLICK LISTENER =====")
+patterns = [
+    # Android runtime form-factor detection
+    r"UiModeManager",
+    r"getCurrentModeType",
+    r"UI_MODE_TYPE_TELEVISION",
+    r"uiMode",
+    r"FEATURE_LEANBACK",
+    r"FEATURE_TELEVISION",
+
+    # F1/build flavor/platform checks
+    r"f1-tv",
+    r"f1_mobile",
+    r"f1-mobile",
+    r"BuildConfig;->FLAVOR",
+    r"BuildConfig;->BUILD_TYPE",
+    r"platform",
+
+    # likely Multiview feature/config gates
+    r"multiview",
+    r"multi.?view",
+    r"tiledmedia",
+]
+
+rx = re.compile("|".join(patterns), re.I)
+
+print("===== TV / MOBILE / MULTIVIEW GATE AUDIT =====")
+
+count = 0
 
 for dirpath, _, filenames in os.walk(root):
-    if target_name not in filenames:
+
+    norm = dirpath.replace("\\", "/")
+
+    # Only F1's own code — ignore AndroidX/ClearVR libraries.
+    if "/com/avs/f1/" not in norm:
         continue
 
-    path = os.path.join(dirpath, target_name)
+    for filename in filenames:
 
-    if "/com/avs/f1/ui/tiledmediaplayer/" not in path.replace("\\", "/"):
-        continue
+        if not filename.endswith(".smali"):
+            continue
 
-    print(f"FILE: {path}\n")
+        # avoid synthetic garbage unless its filename itself is relevant
+        if "ExternalSyntheticLambda" in filename:
+            continue
 
-    with open(path, "r", errors="ignore") as f:
-        for n, line in enumerate(f, 1):
-            print(f"{n}: {line.rstrip()}")
+        path = os.path.join(dirpath, filename)
 
-    break
-else:
-    print("NOT FOUND")
+        try:
+            lines = open(path, "r", errors="ignore").readlines()
+        except Exception:
+            continue
 
-print("===== END TV CLICK LISTENER =====")
+        hits = []
+
+        for i, line in enumerate(lines):
+            if rx.search(line):
+                hits.append((i + 1, line.rstrip()))
+
+        if not hits:
+            continue
+
+        print(f"\nFILE: {path}")
+
+        # Line hits only. Do NOT dump methods.
+        for lineno, text in hits:
+            print(f"{lineno}: {text}")
+
+        count += len(hits)
+
+print(f"\nTOTAL MATCHING LINES: {count}")
+print("===== END TV / MOBILE / MULTIVIEW GATE AUDIT =====")
 PYEOF
 
 # ─── Patch smali ──────────────────────────────────────────────────────────────
