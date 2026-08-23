@@ -457,6 +457,24 @@ new = """    sget-object v0, Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;->N
     return-object v0"""
 
 if old not in content:
+    marker = "getNRPTextureBlitMode"
+    pos = content.find(marker)
+
+    print("===== ACTUAL getNRPTextureBlitMode METHOD =====", file=sys.stderr)
+
+    if pos != -1:
+        start = content.rfind(".method", 0, pos)
+        end = content.find(".end method", pos)
+
+        if start != -1 and end != -1:
+            end += len(".end method")
+            print(content[start:end], file=sys.stderr)
+        else:
+            print(content[max(0, pos - 1000):pos + 2000], file=sys.stderr)
+    else:
+        print("getNRPTextureBlitMode method name not found", file=sys.stderr)
+
+    print("===============================================", file=sys.stderr)
     print(f"Could not find getNRPTextureBlitMode pattern in {path}", file=sys.stderr)
     sys.exit(1)
 
