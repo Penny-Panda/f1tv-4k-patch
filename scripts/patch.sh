@@ -457,41 +457,51 @@ new = """    sget-object v0, Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;->N
     return-object v0"""
 
 if old not in content:
-    print("===== NRP / BLIT REFERENCES IN RenderAPIConfig =====", file=sys.stderr)
+    import os
 
-    lines = content.splitlines()
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(path))))
 
-    found = False
-    for i, line in enumerate(lines):
-        if (
-            "NRPTextureBlitMode" in line
-            or "nrpTextureBlitMode" in line
-            or "BlitMode" in line
-            or "blitMode" in line
-        ):
-            found = True
-            start = max(0, i - 8)
-            end = min(len(lines), i + 9)
+    needles = [
+        "NATIVE_ANDROID_DIRECT_TO_VIEW",
+        "NRPTextureBlitMode",
+        "DIRECT_TO_VIEW",
+        "RenderAPIType",
+        "RenderThreadMode",
+    ]
 
-            print(f"\n--- around line {i + 1} ---", file=sys.stderr)
-            for j in range(start, end):
-                print(f"{j + 1}: {lines[j]}", file=sys.stderr)
+    print("===== GLOBAL CLEARVR RENDER SEARCH =====", file=sys.stderr)
 
-    print("\n===== METHODS CONTAINING NRP / BLIT =====", file=sys.stderr)
+    for dirpath, _, filenames in os.walk(root):
+        for filename in filenames:
+            if not filename.endswith(".smali"):
+                continue
 
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith(".method") and (
-            "nrp" in stripped.lower()
-            or "blit" in stripped.lower()
-            or "render" in stripped.lower()
-        ):
-            print(stripped, file=sys.stderr)
+            full = os.path.join(dirpath, filename)
 
-    if not found:
-        print("No NRPTextureBlitMode/blit references found at all.", file=sys.stderr)
+            try:
+                with open(full, "r", errors="ignore") as f:
+                    data = f.read()
+            except Exception:
+                continue
 
-    print("=====================================================", file=sys.stderr)
+            hits = [needle for needle in needles if needle in data]
+
+            if hits:
+                print(f"\nFILE: {full}", file=sys.stderr)
+                print(f"HITS: {', '.join(hits)}", file=sys.stderr)
+
+                lines = data.splitlines()
+
+                for i, line in enumerate(lines):
+                    if any(needle in line for needle in needles):
+                        start = max(0, i - 4)
+                        end = min(len(lines), i + 5)
+
+                        print(f"\n--- around line {i + 1} ---", file=sys.stderr)
+                        for j in range(start, end):
+                            print(f"{j + 1}: {lines[j]}", file=sys.stderr)
+
+    print("========================================", file=sys.stderr)
     sys.exit(1)
 
 content = content.replace(old, new, 1)
