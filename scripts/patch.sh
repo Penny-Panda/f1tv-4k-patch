@@ -427,93 +427,51 @@ fi
 # force direct-to-view on weak/Amlogic GPUs that drop frames on the GL path
 # (accepting the washed-out HDR look as the tradeoff).
 
-RENDER_CONFIG="$(find "${DECOMPILED}" -name 'RenderAPIConfig.smali' -path '*/tiledmedia/*' -print -quit 2>/dev/null || true)"
+VIEW_MODEL_MANAGER="$(find "${DECOMPILED}" -name 'ViewModelManager.smali' -path '*/tiledmedia/*' -print -quit 2>/dev/null || true)"
+MAIN_UI_THREAD="$(find "${DECOMPILED}" -name 'ViewModelManager$MainUIThread.smali' -path '*/tiledmedia/*' -print -quit 2>/dev/null || true)"
 
 if [[ "${F1TV_DIRECT_TO_VIEW:-0}" == "0" ]]; then
     info "Using the EGL/GL render path for correct 4K colours (set F1TV_DIRECT_TO_VIEW=1 for weak/Amlogic GPUs)"
-elif [[ -n "${RENDER_CONFIG}" && -f "${RENDER_CONFIG}" ]]; then
-    info "Patching NRP blit mode to direct-to-view (opt-in, for weak/Amlogic GPUs)..."
-    python3 - "${RENDER_CONFIG}" << 'PYEOF'
+elif [[ -n "${VIEW_MODEL_MANAGER}" && -f "${VIEW_MODEL_MANAGER}" && -n "${MAIN_UI_THREAD}" && -f "${MAIN_UI_THREAD}" ]]; then
+    info "Forcing ClearVR NRP blit mode to NATIVE_ANDROID_DIRECT_TO_VIEW..."
+
+    python3 - "${VIEW_MODEL_MANAGER}" "${MAIN_UI_THREAD}" << 'PYEOF'
 import sys
 
-path = sys.argv[1]
-with open(path, 'r') as f:
-    content = f.read()
+paths = sys.argv[1:]
 
-# Patch getNRPTextureBlitMode() to always return NATIVE_ANDROID_DIRECT_TO_VIEW.
-# Original:
-#   iget-object v0, p0, ...->nrpTextureBlitMode
-#   return-object v0
-#
-# Patched:
-#   return NATIVE_ANDROID_DIRECT_TO_VIEW unconditionally
+old = "Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;->UV_SHUFFLING_ZERO_COPY:Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;"
+new = "Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;->NATIVE_ANDROID_DIRECT_TO_VIEW:Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;"
 
-old = """    iget-object v0, p0, Lcom/tiledmedia/clearvrview/RenderAPIConfig;->nrpTextureBlitMode:Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;
+total = 0
 
-    return-object v0"""
+for path in paths:
+    with open(path, "r") as f:
+        content = f.read()
 
-new = """    sget-object v0, Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;->NATIVE_ANDROID_DIRECT_TO_VIEW:Lcom/tiledmedia/clearvrenums/NRPTextureBlitMode;
+    count = content.count(old)
 
-    return-object v0"""
+    if count:
+        content = content.replace(old, new)
 
-if old not in content:
-    import os
+        with open(path, "w") as f:
+            f.write(content)
 
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(path))))
+        print(f"Patched {count} direct-to-view reference(s) in {path}")
+        total += count
+    else:
+        print(f"No UV_SHUFFLING_ZERO_COPY references found in {path}")
 
-    needles = [
-        "NATIVE_ANDROID_DIRECT_TO_VIEW",
-        "NRPTextureBlitMode",
-        "DIRECT_TO_VIEW",
-        "RenderAPIType",
-        "RenderThreadMode",
-    ]
-
-    print("===== GLOBAL CLEARVR RENDER SEARCH =====", file=sys.stderr)
-
-    for dirpath, _, filenames in os.walk(root):
-        for filename in filenames:
-            if not filename.endswith(".smali"):
-                continue
-
-            full = os.path.join(dirpath, filename)
-
-            try:
-                with open(full, "r", errors="ignore") as f:
-                    data = f.read()
-            except Exception:
-                continue
-
-            hits = [needle for needle in needles if needle in data]
-
-            if hits:
-                print(f"\nFILE: {full}", file=sys.stderr)
-                print(f"HITS: {', '.join(hits)}", file=sys.stderr)
-
-                lines = data.splitlines()
-
-                for i, line in enumerate(lines):
-                    if any(needle in line for needle in needles):
-                        start = max(0, i - 4)
-                        end = min(len(lines), i + 5)
-
-                        print(f"\n--- around line {i + 1} ---", file=sys.stderr)
-                        for j in range(start, end):
-                            print(f"{j + 1}: {lines[j]}", file=sys.stderr)
-
-    print("========================================", file=sys.stderr)
+if total == 0:
+    print("ERROR: Could not find any UV_SHUFFLING_ZERO_COPY renderer references", file=sys.stderr)
     sys.exit(1)
 
-content = content.replace(old, new, 1)
-
-with open(path, 'w') as f:
-    f.write(content)
-print(f"  Patched {path}")
+print(f"Patched {total} ClearVR renderer reference(s) to NATIVE_ANDROID_DIRECT_TO_VIEW")
 PYEOF
 
-    [[ $? -eq 0 ]] && ok "NRP direct-to-view patch applied (all devices)" || warn "NRP direct-to-view patch failed"
+    [[ $? -eq 0 ]] && ok "NRP direct-to-view patch applied" || die "NRP direct-to-view patch failed"
 else
-    warn "RenderAPIConfig.smali not found, skipping direct-to-view patch"
+    warn "ClearVR ViewModelManager files not found, skipping direct-to-view patch"
 fi
 
 # ─── Force 4K display detection (lifts the 1.5x resolution cap) ─────────────
